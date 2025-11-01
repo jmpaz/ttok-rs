@@ -2,6 +2,7 @@ use std::env;
 use std::io::{self, Read};
 use std::path::Path;
 use std::process;
+use std::process::Command;
 
 use tiktoken_rs::{CoreBPE, cl100k_base, o200k_base, p50k_base, p50k_edit, r50k_base};
 
@@ -14,10 +15,11 @@ fn main() {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 enum Mode {
     Count,
     Diff,
+    GitDiff(Vec<String>),
 }
 
 fn run() -> Result<(), String> {
@@ -38,6 +40,11 @@ fn run() -> Result<(), String> {
             "-d" | "--diff" => {
                 mode = Mode::Diff;
             }
+            "--git" => {
+                let diff_args: Vec<String> = args.collect();
+                mode = Mode::GitDiff(diff_args);
+                break;
+            }
             "-h" | "--help" => {
                 print_help(&program);
                 return Ok(());
@@ -52,21 +59,22 @@ fn run() -> Result<(), String> {
         }
     }
 
-    let mut buffer = Vec::new();
-    io::stdin()
-        .read_to_end(&mut buffer)
-        .map_err(|err| format!("failed to read stdin: {err}"))?;
-
-    let text = String::from_utf8_lossy(&buffer);
     let tokenizer = load_encoding(&encoding)?;
 
     match mode {
         Mode::Count => {
+            let text = read_stdin()?;
             let tokens = tokenizer.encode_with_special_tokens(&text);
             println!("{}", tokens.len());
         }
         Mode::Diff => {
+            let text = read_stdin()?;
             let (added, removed) = diff_token_totals(&tokenizer, &text);
+            println!("{} {}", added, removed);
+        }
+        Mode::GitDiff(diff_args) => {
+            let diff_text = run_git_diff(&diff_args)?;
+            let (added, removed) = diff_token_totals(&tokenizer, &diff_text);
             println!("{} {}", added, removed);
         }
     }
@@ -99,6 +107,10 @@ fn print_help(program: &str) {
         (
             "-d, --diff",
             "Parse git diff and print added/removed token totals".to_string(),
+        ),
+        (
+            "--git [args...]",
+            "Run git diff (default args) and print added/removed token totals".to_string(),
         ),
         ("--list", "Show supported tokenizer names".to_string()),
         ("-h, --help", "Show this message".to_string()),
@@ -142,4 +154,30 @@ fn diff_token_totals(tokenizer: &CoreBPE, diff: &str) -> (usize, usize) {
     }
 
     (added, removed)
+}
+
+fn read_stdin() -> Result<String, String> {
+    let mut buffer = Vec::new();
+    io::stdin()
+        .read_to_end(&mut buffer)
+        .map_err(|err| format!("failed to read stdin: {err}"))?;
+    Ok(String::from_utf8_lossy(&buffer).into_owned())
+}
+
+fn run_git_diff(args: &[String]) -> Result<String, String> {
+    let mut command = Command::new("git");
+    command.arg("diff").arg("--no-ext-diff").arg("--unified=0");
+    for arg in args {
+        command.arg(arg);
+    }
+
+    let output = command
+        .output()
+        .map_err(|err| format!("failed to run git diff: {err}"))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
