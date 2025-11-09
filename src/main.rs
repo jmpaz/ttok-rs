@@ -28,6 +28,7 @@ fn run() -> Result<(), String> {
     let program = display_name(&raw_program);
     let mut encoding = DEFAULT_ENCODING.to_string();
     let mut mode = Mode::Count;
+    let mut net_output = false;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -44,6 +45,9 @@ fn run() -> Result<(), String> {
                 let diff_args: Vec<String> = args.collect();
                 mode = Mode::GitDiff(diff_args);
                 break;
+            }
+            "--net" => {
+                net_output = true;
             }
             "-h" | "--help" => {
                 print_help(&program);
@@ -63,6 +67,9 @@ fn run() -> Result<(), String> {
 
     match mode {
         Mode::Count => {
+            if net_output {
+                return Err("--net can only be used with --diff or --git".into());
+            }
             let text = read_stdin()?;
             let tokens = tokenizer.encode_with_special_tokens(&text);
             println!("{}", tokens.len());
@@ -70,12 +77,12 @@ fn run() -> Result<(), String> {
         Mode::Diff => {
             let text = read_stdin()?;
             let (added, removed) = diff_token_totals(&tokenizer, &text);
-            println!("{} {}", added, removed);
+            print_diff_totals(added, removed, net_output);
         }
         Mode::GitDiff(diff_args) => {
             let diff_text = run_git_diff(&diff_args)?;
             let (added, removed) = diff_token_totals(&tokenizer, &diff_text);
-            println!("{} {}", added, removed);
+            print_diff_totals(added, removed, net_output);
         }
     }
 
@@ -111,6 +118,10 @@ fn print_help(program: &str) {
         (
             "--git [args...]",
             "Run git diff (default args) and print added/removed token totals".to_string(),
+        ),
+        (
+            "--net",
+            "With --diff/--git, print net token delta instead of added/removed totals".to_string(),
         ),
         ("--list", "Show supported tokenizer names".to_string()),
         ("-h, --help", "Show this message".to_string()),
@@ -154,6 +165,15 @@ fn diff_token_totals(tokenizer: &CoreBPE, diff: &str) -> (usize, usize) {
     }
 
     (added, removed)
+}
+
+fn print_diff_totals(added: usize, removed: usize, net_output: bool) {
+    if net_output {
+        let net_total = (added as i128) - (removed as i128);
+        println!("{net_total}");
+    } else {
+        println!("{} {}", added, removed);
+    }
 }
 
 fn read_stdin() -> Result<String, String> {
